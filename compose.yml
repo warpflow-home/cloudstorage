@@ -6,22 +6,23 @@ networks:
   core_net:   # 内部通信用
     driver: overlay
 
+# マニュアルのGlusterFSパス（/mnt/gluster/appdata/）に合わせてボリュームを設定
 volumes:
   minio_data:
     driver: local
-    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/minio }
+    driver_opts: { type: none, o: bind, device: /mnt/gluster/appdata/cloudstorage/minio }
   nextcloud_config:
     driver: local
-    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/nextcloud_config }
+    driver_opts: { type: none, o: bind, device: /mnt/gluster/appdata/cloudstorage/nextcloud_config }
   nextcloud_db_data:
     driver: local
-    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/nextcloud_db }
+    driver_opts: { type: none, o: bind, device: /mnt/gluster/appdata/cloudstorage/nextcloud_db }
   immich_app_data:
     driver: local
-    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/immich_app }
+    driver_opts: { type: none, o: bind, device: /mnt/gluster/appdata/cloudstorage/immich_app }
   immich_db_data:
     driver: local
-    driver_opts: { type: none, o: bind, device: /mnt/glusterfs/swarm-vol/immich_db }
+    driver_opts: { type: none, o: bind, device: /mnt/gluster/appdata/cloudstorage/immich_db }
 
 services:
   # ==========================================
@@ -35,6 +36,7 @@ services:
     networks:
       - public_net
     deploy:
+      mode: replicated
       replicas: 2
 
   # ==========================================
@@ -51,11 +53,12 @@ services:
     networks:
       - public_net
       - core_net
+    deploy:
+      mode: replicated
+      replicas: 1
 
   minio-setup:
     image: minio/mc
-    depends_on:
-      - minio
     networks:
       - core_net
     entrypoint: >
@@ -83,11 +86,17 @@ services:
       - nextcloud_db_data:/var/lib/postgresql/data
     networks:
       - core_net
+    deploy:
+      mode: replicated
+      replicas: 1
 
   nextcloud-redis:
     image: redis:alpine
     networks:
       - core_net
+    deploy:
+      mode: replicated
+      replicas: 1
 
   nextcloud:
     image: nextcloud:apache
@@ -100,12 +109,10 @@ services:
       - NEXTCLOUD_ADMIN_USER=${NC_ADMIN_USER}
       - NEXTCLOUD_ADMIN_PASSWORD=${NC_ADMIN_PASSWORD}
       - NEXTCLOUD_TRUSTED_DOMAINS=${NC_DOMAIN}
-      # --- 追加分: Cloudflare Tunnel / リバースプロキシ設定 ---
       - TRUSTED_PROXIES=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
       - OVERWRITEHOST=${NC_DOMAIN}
       - OVERWRITEPROTOCOL=https
       - OVERWRITEWEBROOT=/
-      # --- MinIO(S3)をプライマリストレージにする自動設定 ---
       - OBJECTSTORE_S3_BUCKET=nextcloud
       - OBJECTSTORE_S3_KEY=${MINIO_USER}
       - OBJECTSTORE_S3_SECRET=${MINIO_PASSWORD}
@@ -120,10 +127,9 @@ services:
     networks:
       - public_net
       - core_net
-    depends_on:
-      - nextcloud-db
-      - nextcloud-redis
-      - minio-setup
+    deploy:
+      mode: replicated
+      replicas: 1
 
   # ==========================================
   # 4. Collabora + Nextcloud Office 自動セットアップ
@@ -131,12 +137,15 @@ services:
   collabora:
     image: collabora/code:latest
     environment:
-      - domain=${NC_DOMAIN_ESCAPED} # 例: nextcloud\\.yourdomain\\.com
+      - domain=${NC_DOMAIN_ESCAPED}
       - dictionaries=en_US,ja_JP
       - extra_params=--o:ssl.enable=false --o:ssl.termination=true
     networks:
       - public_net
       - core_net
+    deploy:
+      mode: replicated
+      replicas: 1
 
   nextcloud-setup:
     image: nextcloud:apache
@@ -144,11 +153,7 @@ services:
       - nextcloud_config:/var/www/html
     networks:
       - core_net
-    depends_on:
-      - nextcloud
-      - collabora
     entrypoint: /bin/bash
-    # Nextcloudが初期化されるのを待ってからCollaboraの設定を注入するスクリプト
     command: >
       -c "
       echo 'Waiting for Nextcloud to finish installation...';
@@ -165,7 +170,7 @@ services:
         condition: on-failure
 
   # ==========================================
-  # 5. Immich (以前のまま)
+  # 5. Immich
   # ==========================================
   immich-db:
     image: tensorchord/pgvecto-rs:pg14-v0.2.0@sha256:90724186f0a3517cf6914295b5ab410db9ce23190a2d9d0b9dd6463e3fa298f0
@@ -177,11 +182,17 @@ services:
       - immich_db_data:/var/lib/postgresql/data
     networks:
       - core_net
+    deploy:
+      mode: replicated
+      replicas: 1
 
   immich-redis:
     image: redis:6.2-alpine@sha256:e3b17ba9479deec4b7d1eeec1548a253acc5374d68d3b27937fcfe4df8d18c7e
     networks:
       - core_net
+    deploy:
+      mode: replicated
+      replicas: 1
 
   immich-server:
     image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:-release}
@@ -197,9 +208,9 @@ services:
     networks:
       - public_net
       - core_net
-    depends_on:
-      - immich-db
-      - immich-redis
+    deploy:
+      mode: replicated
+      replicas: 1
 
   immich-machine-learning:
     image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
@@ -207,13 +218,6 @@ services:
       - immich_app_data:/usr/src/app/upload
     networks:
       - core_net
-
-# ==========================================
-# 元の compose.yml の一番下の部分をこう書き換えます
-# ==========================================
-volumes:
-  minio_data:
-  nextcloud_config:
-  nextcloud_db_data:
-  immich_app_data:
-  immich_db_data:
+    deploy:
+      mode: replicated
+      replicas: 1
