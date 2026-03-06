@@ -1,9 +1,7 @@
 networks:
-  public_net: # Cloudflare Tunnel用
-    driver: overlay
-  core_net:   # 内部通信用
-    driver: overlay
-    internal: true
+  swarm_overlay:
+    external: true
+    name: swarm-overlay
 
 # マニュアルのGlusterFSパス（/mnt/gluster/appdata/）に合わせてボリュームを設定
 volumes:
@@ -33,7 +31,7 @@ services:
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
     networks:
-      - public_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 2
@@ -50,7 +48,7 @@ services:
     volumes:
       - minio_data:/data
     networks:
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -58,10 +56,10 @@ services:
   minio-setup:
     image: minio/mc
     networks:
-      - core_net
+      - swarm_overlay
     entrypoint: >
       /bin/sh -c "
-      until mc alias set myminio http://minio:9000 ${MINIO_USER} ${MINIO_PASSWORD}; do
+      until mc alias set myminio http://tasks.minio:9000 ${MINIO_USER} ${MINIO_PASSWORD}; do
         sleep 5;
       done;
       mc mb myminio/nextcloud --ignore-existing;
@@ -85,7 +83,7 @@ services:
     volumes:
       - nextcloud_db_data:/var/lib/postgresql/data
     networks:
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -93,7 +91,7 @@ services:
   nextcloud-redis:
     image: redis:7-alpine
     networks:
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -101,11 +99,11 @@ services:
   nextcloud:
     image: nextcloud:apache
     environment:
-      - POSTGRES_HOST=nextcloud-db
+      - POSTGRES_HOST=tasks.nextcloud-db
       - POSTGRES_DB=nextcloud
       - POSTGRES_USER=${NC_DB_USER}
       - POSTGRES_PASSWORD=${NC_DB_PASSWORD}
-      - REDIS_HOST=nextcloud-redis
+      - REDIS_HOST=tasks.nextcloud-redis
       - NEXTCLOUD_ADMIN_USER=${NC_ADMIN_USER}
       - NEXTCLOUD_ADMIN_PASSWORD=${NC_ADMIN_PASSWORD}
       - NEXTCLOUD_TRUSTED_DOMAINS=${NC_DOMAIN}
@@ -118,7 +116,7 @@ services:
       - OBJECTSTORE_S3_BUCKET=nextcloud
       - OBJECTSTORE_S3_KEY=${MINIO_USER}
       - OBJECTSTORE_S3_SECRET=${MINIO_PASSWORD}
-      - OBJECTSTORE_S3_HOST=minio
+      - OBJECTSTORE_S3_HOST=tasks.minio
       - OBJECTSTORE_S3_PORT=9000
       - OBJECTSTORE_S3_SSL=false
       - OBJECTSTORE_S3_REGION=us-east-1
@@ -128,8 +126,7 @@ services:
     volumes:
       - nextcloud_config:/var/www/html
     networks:
-      - public_net
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -144,8 +141,7 @@ services:
       - dictionaries=en_US,ja_JP
       - extra_params=--o:ssl.enable=false --o:ssl.termination=true
     networks:
-      - public_net
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -155,7 +151,7 @@ services:
     volumes:
       - nextcloud_config:/var/www/html
     networks:
-      - core_net
+      - swarm_overlay
     entrypoint: /bin/bash
     command: >
       -c "
@@ -185,7 +181,7 @@ services:
     volumes:
       - immich_db_data:/var/lib/postgresql/data
     networks:
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -193,7 +189,7 @@ services:
   immich-redis:
     image: redis:6.2-alpine@sha256:e3b17ba9479deec4b7d1eeec1548a253acc5374d68d3b27937fcfe4df8d18c7e
     networks:
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -204,17 +200,16 @@ services:
     volumes:
       - immich_app_data:/usr/src/app/upload
     environment:
-      - DB_HOSTNAME=immich-db
+      - DB_HOSTNAME=tasks.immich-db
       - DB_USERNAME=${IMMICH_DB_USER}
       - DB_PASSWORD=${IMMICH_DB_PASSWORD}
       - DB_DATABASE_NAME=immich
       - DB_VECTOR_EXTENSION=pgvecto.rs
-      - REDIS_HOSTNAME=immich-redis
+      - REDIS_HOSTNAME=tasks.immich-redis
       - IMMICH_TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
       - TZ=${TZ:-Asia/Tokyo}
     networks:
-      - public_net
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
@@ -226,7 +221,7 @@ services:
     environment:
       - TZ=${TZ:-Asia/Tokyo}
     networks:
-      - core_net
+      - swarm_overlay
     deploy:
       mode: replicated
       replicas: 1
