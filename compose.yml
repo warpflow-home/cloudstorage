@@ -1,10 +1,9 @@
-version: '3.8'
-
 networks:
   public_net: # Cloudflare Tunnel用
     driver: overlay
   core_net:   # 内部通信用
     driver: overlay
+    internal: true
 
 # マニュアルのGlusterFSパス（/mnt/gluster/appdata/）に合わせてボリュームを設定
 volumes:
@@ -51,7 +50,6 @@ services:
     volumes:
       - minio_data:/data
     networks:
-      - public_net
       - core_net
     deploy:
       mode: replicated
@@ -63,8 +61,9 @@ services:
       - core_net
     entrypoint: >
       /bin/sh -c "
-      sleep 10;
-      mc alias set myminio http://minio:9000 ${MINIO_USER} ${MINIO_PASSWORD};
+      until mc alias set myminio http://minio:9000 ${MINIO_USER} ${MINIO_PASSWORD}; do
+        sleep 5;
+      done;
       mc mb myminio/nextcloud --ignore-existing;
       mc mb myminio/immich --ignore-existing;
       exit 0;
@@ -82,6 +81,7 @@ services:
       - POSTGRES_DB=nextcloud
       - POSTGRES_USER=${NC_DB_USER}
       - POSTGRES_PASSWORD=${NC_DB_PASSWORD}
+      - TZ=${TZ:-Asia/Tokyo}
     volumes:
       - nextcloud_db_data:/var/lib/postgresql/data
     networks:
@@ -91,7 +91,7 @@ services:
       replicas: 1
 
   nextcloud-redis:
-    image: redis:alpine
+    image: redis:7-alpine
     networks:
       - core_net
     deploy:
@@ -113,6 +113,8 @@ services:
       - OVERWRITEHOST=${NC_DOMAIN}
       - OVERWRITEPROTOCOL=https
       - OVERWRITEWEBROOT=/
+      - PHP_UPLOAD_LIMIT=10G
+      - APACHE_BODY_LIMIT=0
       - OBJECTSTORE_S3_BUCKET=nextcloud
       - OBJECTSTORE_S3_KEY=${MINIO_USER}
       - OBJECTSTORE_S3_SECRET=${MINIO_PASSWORD}
@@ -122,6 +124,7 @@ services:
       - OBJECTSTORE_S3_REGION=us-east-1
       - OBJECTSTORE_S3_USEPATH_STYLE=true
       - OBJECTSTORE_S3_AUTOCREATE=true
+      - TZ=${TZ:-Asia/Tokyo}
     volumes:
       - nextcloud_config:/var/www/html
     networks:
@@ -161,7 +164,7 @@ services:
         sleep 10;
       done;
       echo 'Nextcloud is ready! Configuring Collabora Office...';
-      su -s /bin/bash www-data -c 'php occ app:install richdocuments';
+      su -s /bin/bash www-data -c 'php occ app:install richdocuments || php occ app:enable richdocuments || true';
       su -s /bin/bash www-data -c 'php occ config:app:set richdocuments wopi_url --value=\"https://collabora.${NC_DOMAIN_BARE}\"';
       echo 'Setup finished!';
       "
@@ -178,6 +181,7 @@ services:
       POSTGRES_PASSWORD: ${IMMICH_DB_PASSWORD}
       POSTGRES_USER: ${IMMICH_DB_USER}
       POSTGRES_DB: immich
+      TZ: ${TZ:-Asia/Tokyo}
     volumes:
       - immich_db_data:/var/lib/postgresql/data
     networks:
@@ -204,7 +208,10 @@ services:
       - DB_USERNAME=${IMMICH_DB_USER}
       - DB_PASSWORD=${IMMICH_DB_PASSWORD}
       - DB_DATABASE_NAME=immich
+      - DB_VECTOR_EXTENSION=pgvecto.rs
       - REDIS_HOSTNAME=immich-redis
+      - IMMICH_TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      - TZ=${TZ:-Asia/Tokyo}
     networks:
       - public_net
       - core_net
@@ -216,6 +223,8 @@ services:
     image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION:-release}
     volumes:
       - immich_app_data:/usr/src/app/upload
+    environment:
+      - TZ=${TZ:-Asia/Tokyo}
     networks:
       - core_net
     deploy:
